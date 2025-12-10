@@ -1,0 +1,137 @@
+name: Daily NBA Props Model
+
+on:
+  schedule:
+    # Training: 7:00 AM EST = 12:00 UTC (winter) / 11:00 UTC (summer)
+    - cron: '0 12 * * *'
+    # Predictions: 4:30 PM CST = 22:30 UTC (winter) / 21:30 UTC (summer)
+    - cron: '30 22 * * *'
+  workflow_dispatch:
+    inputs:
+      job_type:
+        description: 'Job to run'
+        required: true
+        default: 'predictions'
+        type: choice
+        options:
+          - training
+          - predictions
+          - both
+
+jobs:
+  training:
+    runs-on: ubuntu-latest
+    if: github.event.schedule == '0 12 * * *' || github.event.inputs.job_type == 'training' || github.event.inputs.job_type == 'both'
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          pip install pandas numpy scipy scikit-learn xgboost lightgbm requests
+      
+      - name: Set training date
+        run: |
+          echo "TRAINING_CUTOFF=$(date -d 'yesterday' '+%Y-%m-%d')" >> $GITHUB_ENV
+          echo "TEST_DATE=$(date '+%Y-%m-%d')" >> $GITHUB_ENV
+      
+      - name: Run training
+        env:
+          BALLDONTLIE_API_KEY: ${{ secrets.BALLDONTLIE_API_KEY }}
+          TRAINING_CUTOFF_DATE: ${{ env.TRAINING_CUTOFF }}
+          TEST_DATE: ${{ env.TEST_DATE }}
+        run: |
+          python run_training.py
+      
+      - name: Commit model to repo
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add trained_model.pkl training_data.pkl 2>/dev/null || true
+          git commit -m "Daily model training - ${{ env.TEST_DATE }}" || echo "No changes"
+          git push || echo "Nothing to push"
+
+  predictions:
+    runs-on: ubuntu-latest
+    if: github.event.schedule == '30 22 * * *' || github.event.inputs.job_type == 'predictions' || github.event.inputs.job_type == 'both'
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Pull latest
+        run: git pull origin main || true
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          pip install pandas numpy scipy scikit-learn xgboost lightgbm requests
+      
+      - name: Set prediction date
+        run: |
+          echo "PREDICTION_DATE=$(date '+%Y-%m-%d')" >> $GITHUB_ENV
+      
+      - name: Run predictions
+        env:
+          BALLDONTLIE_API_KEY: ${{ secrets.BALLDONTLIE_API_KEY }}
+          PREDICTION_DATE: ${{ env.PREDICTION_DATE }}
+        run: |
+          python generate_all_predictions.py
+      
+      - name: Commit predictions
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add predictions/ 2>/dev/null || true
+          git commit -m "Daily predictions - ${{ env.PREDICTION_DATE }}" || echo "No changes"
+          git push || echo "Nothing to push"
+
+  grade_results:
+    runs-on: ubuntu-latest
+    if: github.event.schedule == '0 12 * * *' || github.event.inputs.job_type == 'training' || github.event.inputs.job_type == 'both'
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Pull latest
+        run: git pull origin main || true
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          pip install pandas numpy scipy requests
+      
+      - name: Grade previous predictions
+        env:
+          BALLDONTLIE_API_KEY: ${{ secrets.BALLDONTLIE_API_KEY }}
+        run: |
+          GRADE_DATE=$(date -d 'yesterday' '+%Y-%m-%d')
+          python track_results.py grade $GRADE_DATE || echo "No predictions to grade"
+          python track_results.py report > performance_report.txt || true
+      
+      - name: Commit grading results
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add prediction_history.csv performance_report.txt 2>/dev/null || true
+          git commit -m "Graded results - $(date -d 'yesterday' '+%Y-%m-%d')" || echo "No changes"
+          git push || echo "Nothing to push"
