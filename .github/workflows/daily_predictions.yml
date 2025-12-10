@@ -1,0 +1,35 @@
+name: Daily NBA Props Model
+
+on:
+  schedule:
+    - cron: '0 12 * * *'
+    - cron: '30 22 * * *'
+  workflow_dispatch:
+    inputs:
+      job_type:
+        description: 'Job to run'
+        required: true
+        default: 'predictions'
+        type: choice
+        options:
+          - training
+          - predictions
+
+jobs:
+  predictions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install pandas numpy scipy scikit-learn xgboost lightgbm requests
+      - run: python generate_all_predictions.py
+        env:
+          BALLDONTLIE_API_KEY: ${{ secrets.BALLDONTLIE_API_KEY }}
+      - run: |
+          git config user.email "action@github.com"
+          git config user.name "GitHub Action"
+          git add predictions/ || true
+          git commit -m "Daily predictions" || true
+          git push || true
